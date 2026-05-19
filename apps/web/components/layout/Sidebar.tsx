@@ -18,7 +18,7 @@ const navItems = [
   { name: "Overview", href: "/dashboard", icon: LayoutDashboard },
   { name: "Crops", href: "/dashboard/scan", icon: Sprout },
   { name: "Weather", href: "#", icon: CloudRain },
-  { name: "History", href: "#", icon: History },
+  { name: "History", href: "/dashboard/history", icon: History },
   { name: "Settings", href: "/dashboard/settings", icon: Settings },
 ];
 

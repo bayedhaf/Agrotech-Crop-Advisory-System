@@ -2,18 +2,24 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Menu, Bell } from "lucide-react";
+import { usePathname } from "next/navigation";
+import { Menu, Bell, Home, Camera, History, Settings } from "lucide-react";
 import { onAuthStateChanged, type User } from "firebase/auth";
-
-import { auth } from "@/lib/firebase";
+import { cn } from "@/lib/utils";
+import { auth, isFirebaseConfigured } from "@/lib/firebase";
 interface TopbarProps {
   onMenuClick: () => void;
 }
 
 export function Topbar({ onMenuClick }: TopbarProps) {
   const [user, setUser] = useState<User | null>(null);
+  const pathname = usePathname();
 
   useEffect(() => {
+    if (!isFirebaseConfigured || !auth) {
+      return;
+    }
+
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
     });
@@ -29,6 +35,13 @@ export function Topbar({ onMenuClick }: TopbarProps) {
     .slice(0, 2)
     .toUpperCase();
 
+  const navItems = [
+    { name: "Fields", href: "/dashboard", icon: Home },
+    { name: "Scan", href: "/dashboard/scan", icon: Camera },
+    { name: "History", href: "/dashboard/history", icon: History },
+    { name: "Settings", href: "/dashboard/settings", icon: Settings },
+  ];
+
   return (
     <header className="sticky top-0 z-30 h-16 bg-[#131313] border-b border-[#41493e] flex items-center justify-between px-4 lg:px-6">
       <button
@@ -37,6 +50,28 @@ export function Topbar({ onMenuClick }: TopbarProps) {
       >
         <Menu className="h-5 w-5" />
       </button>
+
+      {/* Desktop Navigation */}
+      <nav className="hidden lg:flex items-center gap-1">
+        {navItems.map((item) => {
+          const isActive = pathname === item.href;
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={cn(
+                "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors",
+                isActive
+                  ? "bg-[#1b5e20]/25 text-[#91d78a]"
+                  : "text-[#c0c9bb] hover:bg-[#1c1b1b] hover:text-[#e5e2e1]"
+              )}
+            >
+              <item.icon className="h-4 w-4" />
+              {item.name}
+            </Link>
+          );
+        })}
+      </nav>
 
       <div className="flex items-center gap-3 ml-auto">
         <button className="relative p-2 rounded-full text-[#c0c9bb] hover:bg-[#1c1b1b] hover:text-[#91d78a]">

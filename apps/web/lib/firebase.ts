@@ -1,7 +1,7 @@
 // Import the functions you need from the SDKs you need
-import { initializeApp, getApps, getApp } from "firebase/app";
+import { initializeApp, getApps, getApp, type FirebaseApp } from "firebase/app";
 import { getAnalytics, isSupported } from "firebase/analytics";
-import { getAuth } from "firebase/auth";
+import { getAuth, type Auth } from "firebase/auth";
 // TODO: Add SDKs for Firebase products that you want to use
 // https://firebase.google.com/docs/web/setup#available-libraries
 
@@ -17,17 +17,33 @@ const firebaseConfig = {
   measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
 };
 
-// Initialize Firebase
-const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-const auth = getAuth(app);
+// Check if Firebase is configured
+const isFirebaseConfigured = !!(
+  firebaseConfig.apiKey &&
+  firebaseConfig.apiKey !== "your-api-key-here" &&
+  firebaseConfig.apiKey !== ""
+);
 
-// Initialize Analytics if supported
-if (typeof window !== "undefined") {
-  isSupported().then((supported) => {
-    if (supported) {
-      getAnalytics(app);
-    }
-  });
+// Initialize Firebase only if configured
+let app: FirebaseApp | undefined;
+let auth: Auth | undefined;
+
+if (isFirebaseConfigured) {
+  app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+  auth = getAuth(app);
+
+  // Initialize Analytics if supported
+  if (typeof window !== "undefined") {
+    isSupported().then((supported) => {
+      if (supported && app) {
+        getAnalytics(app);
+      }
+    });
+  }
+} else {
+  console.warn(
+    "⚠️ Firebase is not configured. Please add your Firebase credentials to .env.local file."
+  );
 }
 
-export { app, auth };
+export { app, auth, isFirebaseConfigured };
