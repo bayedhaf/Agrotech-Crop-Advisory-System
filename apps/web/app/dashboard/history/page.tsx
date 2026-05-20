@@ -35,12 +35,10 @@ type ScanHistoryItem = {
 	source?: "api" | "local";
 	confidence?: number;
 	severity?: string;
+	payload?: DiagnoseResponse;
 };
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "https://smart-agric-api.vercel.app").replace(
-	/\/$/,
-	""
-);
+const API_BASE = "";
 const LOCAL_HISTORY_KEY = "diagnose-history-v1";
 
 const toIsoString = (value?: string) => {
@@ -122,6 +120,20 @@ const mergeHistory = (apiItems: ScanHistoryItem[], localItems: ScanHistoryItem[]
 	});
 };
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const fetchWithRetry = async (input: RequestInfo, init: RequestInit, retries = 1) => {
+	let attempt = 0;
+	let response = await fetch(input, init);
+	while (response.status === 429 && attempt < retries) {
+		const delay = 1000 * (attempt + 1);
+		await sleep(delay);
+		attempt += 1;
+		response = await fetch(input, init);
+	}
+	return response;
+};
+
 export default function HistoryPage() {
 	const router = useRouter();
 	const [user, setUser] = useState<User | null>(null);
@@ -149,11 +161,14 @@ export default function HistoryPage() {
 		setError(null);
 		try {
 			const token = await currentUser.getIdToken();
-			const response = await fetch(`${API_BASE}/api/v1/diagnose/history`, {
+			const response = await fetchWithRetry(`${API_BASE}/api/v1/diagnose/history`, {
 				headers: {
 					Authorization: `Bearer ${token}`,
 				},
 			});
+			if (response.status === 429) {
+				throw new Error("Rate limited. Please wait and try again.");
+			}
 			if (!response.ok) {
 				throw new Error(`Failed to load history (${response.status})`);
 			}

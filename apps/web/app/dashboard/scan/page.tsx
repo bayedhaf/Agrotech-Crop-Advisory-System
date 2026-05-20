@@ -35,6 +35,7 @@ interface ScanHistoryItem {
   createdAt?: string;
   source?: "api" | "local";
   selected?: boolean;
+  payload?: DiagnoseResponse;
 }
 
 type DiagnoseResponse = Record<string, unknown> & {
@@ -180,10 +181,7 @@ function ThumbnailCard({
   );
 }
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "https://smart-agric-api.vercel.app").replace(
-  /\/$/,
-  ""
-);
+const API_BASE = "";
 const LOCAL_HISTORY_KEY = "diagnose-history-v1";
 
 const toIsoString = (value?: string) => {
@@ -259,6 +257,17 @@ const normalizeFindings = (entry: DiagnoseResponse | null): DiagnosticFinding[] 
   return [];
 };
 
+const extractDiagnosisPayload = (payload: unknown): DiagnoseResponse => {
+  if (!payload || typeof payload !== "object") {
+    return {} as DiagnoseResponse;
+  }
+  const record = payload as Record<string, unknown>;
+  if (record.data && typeof record.data === "object") {
+    return record.data as DiagnoseResponse;
+  }
+  return payload as DiagnoseResponse;
+};
+
 const normalizeTreatments = (entry: DiagnoseResponse | null): TreatmentStep[] => {
   if (!entry) {
     return [];
@@ -293,6 +302,20 @@ const normalizeVitality = (entry: DiagnoseResponse | null) => {
   }
   const normalized = score <= 1 ? score * 100 : score;
   return Math.max(0, Math.min(100, Math.round(normalized)));
+};
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const fetchWithRetry = async (input: RequestInfo, init: RequestInit, retries = 1) => {
+  let attempt = 0;
+  let response = await fetch(input, init);
+  while (response.status === 429 && attempt < retries) {
+    const delay = 1000 * (attempt + 1);
+    await sleep(delay);
+    attempt += 1;
+    response = await fetch(input, init);
+  }
+  return response;
 };
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
@@ -478,11 +501,21 @@ export default function AIDiagnosticPage() {
     setHistoryError(null);
     try {
       const token = await currentUser.getIdToken();
-      const response = await fetch(`${API_BASE}/api/v1/diagnose/history`, {
+      console.info("[diagnose] history request", {
+        url: `${API_BASE}/api/v1/diagnose/history`,
+      });
+      const response = await fetchWithRetry(`${API_BASE}/api/v1/diagnose/history`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
       });
+      console.info("[diagnose] history response", {
+        status: response.status,
+        ok: response.ok,
+      });
+      if (response.status === 429) {
+        throw new Error("Rate limited. Please wait and try again.");
+      }
       if (!response.ok) {
         throw new Error(`Failed to load history (${response.status})`);
       }
@@ -494,6 +527,7 @@ export default function AIDiagnosticPage() {
       const merged = mergeHistory(apiEntries, localItems);
       setHistory(merged);
     } catch (error) {
+      console.error("[diagnose] history error", error);
       setHistoryError(error instanceof Error ? error.message : "Unable to load history.");
     } finally {
       setHistoryLoading(false);
@@ -508,25 +542,44 @@ export default function AIDiagnosticPage() {
     if (cached?.imageUrl) {
       setSelectedImage(cached.imageUrl);
     }
+    if (cached?.payload) {
+      setSelectedFile(null);
+      setActiveCamera(false);
+      setSelectedHistoryId(id);
+      setScanError(null);
+      setDiagnosis(cached.payload);
+      setFindings(normalizeFindings(cached.payload));
+      setTreatments(normalizeTreatments(cached.payload));
+      return;
+    }
     setSelectedFile(null);
     setActiveCamera(false);
     setSelectedHistoryId(id);
     setScanError(null);
     try {
       const token = await user.getIdToken();
+      console.info("[diagnose] detail request", {
+        url: `${API_BASE}/api/v1/diagnose/${id}`,
+      });
       const response = await fetch(`${API_BASE}/api/v1/diagnose/${id}`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
       });
+      console.info("[diagnose] detail response", {
+        status: response.status,
+        ok: response.ok,
+      });
       if (!response.ok) {
         throw new Error(`Failed to load diagnosis (${response.status})`);
       }
-      const payload = (await response.json()) as DiagnoseResponse;
+      const rawPayload = (await response.json()) as unknown;
+      const payload = extractDiagnosisPayload(rawPayload);
       setDiagnosis(payload);
       setFindings(normalizeFindings(payload));
       setTreatments(normalizeTreatments(payload));
     } catch (error) {
+      console.error("[diagnose] detail error", error);
       setScanError(error instanceof Error ? error.message : "Unable to load diagnosis.");
     }
   };
@@ -538,11 +591,18 @@ export default function AIDiagnosticPage() {
     setHistoryError(null);
     try {
       const token = await user.getIdToken();
+      console.info("[diagnose] delete request", {
+        url: `${API_BASE}/api/v1/diagnose/${id}`,
+      });
       const response = await fetch(`${API_BASE}/api/v1/diagnose/${id}`, {
         method: "DELETE",
         headers: {
           Authorization: `Bearer ${token}`,
         },
+      });
+      console.info("[diagnose] delete response", {
+        status: response.status,
+        ok: response.ok,
       });
       if (!response.ok) {
         throw new Error(`Failed to delete history (${response.status})`);
@@ -554,6 +614,7 @@ export default function AIDiagnosticPage() {
         setSelectedHistoryId(null);
       }
     } catch (error) {
+      console.error("[diagnose] delete error", error);
       setHistoryError(error instanceof Error ? error.message : "Unable to delete history.");
     }
   };
@@ -573,6 +634,12 @@ export default function AIDiagnosticPage() {
       const token = await user.getIdToken();
       const formData = new FormData();
       formData.append("image", selectedFile);
+      console.info("[diagnose] submit request", {
+        url: `${API_BASE}/api/v1/diagnose`,
+        fileName: selectedFile.name,
+        fileSize: selectedFile.size,
+        fileType: selectedFile.type,
+      });
       const response = await fetch(`${API_BASE}/api/v1/diagnose`, {
         method: "POST",
         headers: {
@@ -581,11 +648,16 @@ export default function AIDiagnosticPage() {
         body: formData,
       });
       setScanProgress(70);
+      console.info("[diagnose] submit response", {
+        status: response.status,
+        ok: response.ok,
+      });
       if (!response.ok) {
         const text = await response.text();
         throw new Error(text || `Diagnosis failed (${response.status})`);
       }
-      const payload = (await response.json()) as DiagnoseResponse;
+      const rawPayload = (await response.json()) as unknown;
+      const payload = extractDiagnosisPayload(rawPayload);
       setScanProgress(100);
       setDiagnosis(payload);
       const normalizedFindings = normalizeFindings(payload);
@@ -593,18 +665,23 @@ export default function AIDiagnosticPage() {
       setFindings(normalizedFindings);
       setTreatments(normalizedTreatments);
 
-      const historyItem = normalizeHistoryItem(payload, "local") ?? {
-        id: `${Date.now()}`,
-        imageUrl: selectedImage ?? undefined,
-        disease: payload.disease ?? payload.status ?? "Diagnosis",
-        createdAt: new Date().toISOString(),
-        source: "local",
-      };
+      const normalizedItem = normalizeHistoryItem(payload, "local");
+      const historyItem: ScanHistoryItem = normalizedItem
+        ? { ...normalizedItem, payload }
+        : {
+            id: `${Date.now()}`,
+            imageUrl: selectedImage ?? undefined,
+            disease: payload.disease ?? payload.status ?? "Diagnosis",
+            createdAt: new Date().toISOString(),
+            source: "local",
+            payload,
+          };
       const localItems = [historyItem, ...loadLocalHistory()];
       saveLocalHistory(localItems);
       setHistory((prev) => mergeHistory(prev, [historyItem]));
       setSelectedHistoryId(historyItem.id);
     } catch (error) {
+      console.error("[diagnose] submit error", error);
       setScanProgress(0);
       setScanError(error instanceof Error ? error.message : "Diagnosis failed.");
     } finally {

@@ -1,4 +1,4 @@
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "https://smart-agric-api.vercel.app").replace(
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "https://smart-agric-api.vercel.app/").replace(
   /\/$/,
   ""
 );
@@ -7,10 +7,15 @@ const buildHeaders = (request: Request) => {
   const headers = new Headers(request.headers);
   headers.delete("host");
   headers.delete("content-length");
+  headers.set("ngrok-skip-browser-warning", "true");
   return headers;
 };
 
 const proxyRequest = async (request: Request, target: string) => {
+  console.info("[diagnose-proxy] request", {
+    method: request.method,
+    target,
+  });
   const init: RequestInit = {
     method: request.method,
     headers: buildHeaders(request),
@@ -22,7 +27,17 @@ const proxyRequest = async (request: Request, target: string) => {
     init.duplex = "half";
   }
 
-  const response = await fetch(target, init);
+  let response: Response;
+  try {
+    response = await fetch(target, init);
+  } catch (error) {
+    console.error("[diagnose-proxy] fetch error", error);
+    throw error;
+  }
+  console.info("[diagnose-proxy] response", {
+    status: response.status,
+    ok: response.ok,
+  });
   const responseHeaders = new Headers(response.headers);
   responseHeaders.delete("content-encoding");
   responseHeaders.delete("transfer-encoding");
