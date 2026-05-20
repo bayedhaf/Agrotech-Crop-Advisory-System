@@ -49,10 +49,29 @@ type TreatmentStep = {
   active?: boolean;
 };
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "https://smart-agric-api.vercel.app").replace(
-  /\/$/,
-  ""
-);
+const API_BASE = "";
+const LOCAL_HISTORY_KEY = "diagnose-history-v1";
+
+const loadLocalHistory = (): Array<{ id: string; payload?: DiagnoseResponse }> => {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  const stored = window.localStorage.getItem(LOCAL_HISTORY_KEY);
+  if (!stored) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(stored) as Array<{ id?: string; payload?: DiagnoseResponse }>;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter((item) => typeof item?.id === "string")
+      .map((item) => ({ id: String(item.id), payload: item.payload }));
+  } catch {
+    return [];
+  }
+};
 
 const normalizeFindings = (entry: DiagnoseResponse | null): DiagnosticFinding[] => {
   if (!entry) {
@@ -121,6 +140,17 @@ const normalizeVitality = (entry: DiagnoseResponse | null) => {
   return Math.max(0, Math.min(100, Math.round(normalized)));
 };
 
+const extractDiagnosisPayload = (payload: unknown): DiagnoseResponse => {
+  if (!payload || typeof payload !== "object") {
+    return {} as DiagnoseResponse;
+  }
+  const record = payload as Record<string, unknown>;
+  if (record.data && typeof record.data === "object") {
+    return record.data as DiagnoseResponse;
+  }
+  return payload as DiagnoseResponse;
+};
+
 export default function HistoryDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -152,6 +182,13 @@ export default function HistoryDetailPage() {
       setIsLoading(true);
       setError(null);
       try {
+        const localMatch = loadLocalHistory().find((item) => item.id === historyId);
+        if (localMatch?.payload) {
+          setDiagnosis(localMatch.payload);
+          setFindings(normalizeFindings(localMatch.payload));
+          setTreatments(normalizeTreatments(localMatch.payload));
+          return;
+        }
         const token = await currentUser.getIdToken();
         const response = await fetch(`${API_BASE}/api/v1/diagnose/${historyId}`, {
           headers: {
@@ -161,7 +198,8 @@ export default function HistoryDetailPage() {
         if (!response.ok) {
           throw new Error(`Failed to load diagnosis (${response.status})`);
         }
-        const payload = (await response.json()) as DiagnoseResponse;
+        const rawPayload = (await response.json()) as unknown;
+        const payload = extractDiagnosisPayload(rawPayload);
         setDiagnosis(payload);
         setFindings(normalizeFindings(payload));
         setTreatments(normalizeTreatments(payload));
