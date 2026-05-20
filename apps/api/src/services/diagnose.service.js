@@ -1,12 +1,12 @@
 // services/diagnose.service.js
 // Orchestrates: image upload → AI diagnosis → Firebase save
-const { admin, db } = require("../../confi/firebase");
+const { admin, db, firebaseInitialized } = require("../../confi/firebase");
 const { diagnoseCropDisease } = require("./ai.service");
 
 /**
  * Creates a new diagnosis:
  * 1. Upload the image to Firebase Storage
- * 2. Run Claude Vision AI diagnosis
+ * 2. Run Claude Vision AI diagnosis (now Roboflow)
  * 3. Save the result to Firestore under /diagnoses/{userId}/{diagnosisId}
  *
  * @param {string} userId        - Authenticated user ID
@@ -17,10 +17,13 @@ const { diagnoseCropDisease } = require("./ai.service");
  * @returns {Promise<object>}    - Saved diagnosis document
  */
 async function createDiagnosis(userId, imageBuffer, mimeType, originalName, cropType) {
-  // 1. Upload image to Firebase Storage
-  const imageUrl = await uploadImageToStorage(userId, imageBuffer, mimeType, originalName);
+  // 1. Upload image to Firebase Storage (or use local mock URL)
+  let imageUrl = "https://storage.googleapis.com/mock-bucket/mock-leaf-image.jpg";
+  if (firebaseInitialized) {
+    imageUrl = await uploadImageToStorage(userId, imageBuffer, mimeType, originalName);
+  }
 
-  // 2. Run AI diagnosis
+  // 2. Run AI diagnosis (utilizes Roboflow)
   const aiResult = await diagnoseCropDisease(imageBuffer, mimeType, cropType);
 
   // 3. Build and save diagnosis document
@@ -31,19 +34,41 @@ async function createDiagnosis(userId, imageBuffer, mimeType, originalName, crop
     createdAt: new Date().toISOString(),
   };
 
-  const docRef = await db
-    .collection("diagnoses")
-    .doc(userId)
-    .collection("records")
-    .add(diagnosisData);
+  let diagnosisId = "mock-diag-" + Date.now();
+  if (firebaseInitialized) {
+    const docRef = await db
+      .collection("diagnoses")
+      .doc(userId)
+      .collection("records")
+      .add(diagnosisData);
+    diagnosisId = docRef.id;
+  }
 
-  return { diagnosisId: docRef.id, ...diagnosisData };
+  return { diagnosisId, ...diagnosisData };
 }
 
 /**
  * Retrieves all diagnoses for a user, ordered by creation time (newest first).
  */
 async function getDiagnosisHistory(userId) {
+  if (!firebaseInitialized) {
+    return [
+      {
+        diagnosisId: "mock-diag-12345",
+        isHealthy: false,
+        disease: "Common Rust",
+        confidence: 0.89,
+        severity: "high",
+        remedy: "Apply copper-based fungicides immediately. Remove and destroy severely affected leaves.",
+        prevention: "Plant rust-resistant crop hybrids, practice crop rotation, and avoid overhead sprinkler watering.",
+        description: "Detected symptoms of 'Common Rust' on the crop leaf (Confidence: 89.0%).",
+        imageUrl: "https://storage.googleapis.com/mock-bucket/mock-leaf-image.jpg",
+        userId,
+        createdAt: new Date().toISOString()
+      }
+    ];
+  }
+
   const snapshot = await db
     .collection("diagnoses")
     .doc(userId)
@@ -59,6 +84,22 @@ async function getDiagnosisHistory(userId) {
  * Retrieves a single diagnosis by ID for the given user.
  */
 async function getDiagnosisById(userId, diagnosisId) {
+  if (!firebaseInitialized) {
+    return {
+      diagnosisId,
+      isHealthy: false,
+      disease: "Common Rust",
+      confidence: 0.89,
+      severity: "high",
+      remedy: "Apply copper-based fungicides immediately. Remove and destroy severely affected leaves.",
+      prevention: "Plant rust-resistant crop hybrids, practice crop rotation, and avoid overhead sprinkler watering.",
+      description: "Detected symptoms of 'Common Rust' on the crop leaf (Confidence: 89.0%).",
+      imageUrl: "https://storage.googleapis.com/mock-bucket/mock-leaf-image.jpg",
+      userId,
+      createdAt: new Date().toISOString()
+    };
+  }
+
   const doc = await db
     .collection("diagnoses")
     .doc(userId)
@@ -76,6 +117,10 @@ async function getDiagnosisById(userId, diagnosisId) {
  * Deletes a diagnosis and its associated image from Firebase Storage.
  */
 async function deleteDiagnosis(userId, diagnosisId) {
+  if (!firebaseInitialized) {
+    return true;
+  }
+
   const docRef = db
     .collection("diagnoses")
     .doc(userId)

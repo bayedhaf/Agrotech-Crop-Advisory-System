@@ -1,11 +1,16 @@
-// middleware/auth.middleware.js
-const { admin } = require("../../confi/firebase");
+const { admin, firebaseInitialized } = require("../../confi/firebase");
 
 /**
  * Verifies Firebase ID token sent in Authorization: Bearer <token> header.
  * Attaches decoded token as req.user on success.
  */
 async function verifyToken(req, res, next) {
+  // Graceful local development bypass if Firebase is not initialized
+  if (!firebaseInitialized) {
+    req.user = { uid: "mock-dev-farmer", email: "farmer@mock.com" };
+    return next();
+  }
+
   try {
     const authHeader = req.headers.authorization || "";
     if (!authHeader.startsWith("Bearer ")) {
