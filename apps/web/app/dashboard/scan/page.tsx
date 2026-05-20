@@ -573,7 +573,6 @@ export default function AIDiagnosticPage() {
       const token = await user.getIdToken();
       const formData = new FormData();
       formData.append("image", selectedFile);
-      formData.append("file", selectedFile);
       const response = await fetch(`${API_BASE}/api/v1/diagnose`, {
         method: "POST",
         headers: {
