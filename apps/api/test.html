@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Agriculture — Backend Test</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      padding: 30px 16px;
+    }
+    h1 {
+      text-align: center;
+      font-size: 26px;
+      color: #4ade80;
+      margin-bottom: 6px;
+    }
+    .subtitle {
+      text-align: center;
+      color: #94a3b8;
+      font-size: 14px;
+      margin-bottom: 30px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      max-width: 960px;
+      margin: 0 auto;
+    }
+    @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+
+    .card {
+      background: #1e293b;
+      border-radius: 14px;
+      padding: 24px;
+      border: 1px solid #334155;
+    }
+    .card h2 {
+      font-size: 16px;
+      font-weight: 600;
+      color: #4ade80;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Sensor Grid */
+    .sensor-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .sensor-item {
+      background: #0f172a;
+      border-radius: 10px;
+      padding: 14px;
+      text-align: center;
+    }
+    .sensor-label { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
+    .sensor-value { font-size: 28px; font-weight: 700; color: #f8fafc; margin: 4px 0; }
+    .sensor-unit { font-size: 12px; color: #94a3b8; }
+    .recommendation-box {
+      margin-top: 14px;
+      background: #0f172a;
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 13px;
+      color: #fbbf24;
+      border-left: 3px solid #fbbf24;
+    }
+    .status-dot {
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      background: #22c55e;
+      display: inline-block;
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    /* Diagnosis */
+    .file-drop {
+      border: 2px dashed #334155;
+      border-radius: 10px;
+      padding: 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s;
+      margin-bottom: 14px;
+    }
+    .file-drop:hover { border-color: #4ade80; }
+    .file-drop input { display: none; }
+    .file-drop p { color: #64748b; font-size: 13px; margin-top: 6px; }
+    .file-name { color: #4ade80; font-size: 13px; margin-top: 4px; font-weight: 600; }
+    .preview-img {
+      max-width: 100%;
+      border-radius: 8px;
+      margin-bottom: 12px;
+      display: none;
+      max-height: 180px;
+      object-fit: cover;
+    }
+    .btn {
+      width: 100%;
+      background: #16a34a;
+      color: white;
+      border: none;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn:hover { background: #15803d; }
+    .btn:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
+
+    .result-box {
+      margin-top: 14px;
+      border-radius: 10px;
+      padding: 14px;
+      font-size: 13px;
+      display: none;
+    }
+    .result-box.success { background: #052e16; border: 1px solid #22c55e; color: #bbf7d0; }
+    .result-box.error { background: #2d0a0a; border: 1px solid #ef4444; color: #fca5a5; }
+    .result-box h3 { font-size: 15px; margin-bottom: 10px; }
+    .result-row { display: flex; justify-content: space-between; margin-bottom: 6px; }
+    .result-row .label { color: #94a3b8; }
+    .result-row .val { font-weight: 600; text-align: right; max-width: 60%; }
+    .disease-badge {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .badge-healthy { background: #052e16; color: #4ade80; border: 1px solid #4ade80; }
+    .badge-disease { background: #450a0a; color: #f87171; border: 1px solid #f87171; }
+    .spinner {
+      display: none;
+      text-align: center;
+      padding: 20px;
+      color: #64748b;
+      font-size: 13px;
+    }
+
+    /* History */
+    .history-section { grid-column: 1 / -1; }
+    .history-log {
+      background: #0f172a;
+      border-radius: 10px;
+      padding: 14px;
+      max-height: 180px;
+      overflow-y: auto;
+      font-size: 12px;
+      font-family: monospace;
+      color: #94a3b8;
+    }
+    .log-entry { padding: 4px 0; border-bottom: 1px solid #1e293b; }
+    .log-entry span.ts { color: #475569; }
+    .log-entry span.moisture-low { color: #f87171; }
+    .log-entry span.moisture-ok { color: #fbbf24; }
+    .log-entry span.moisture-good { color: #4ade80; }
+  </style>
+</head>
+<body>
+
+<h1>🌱 Smart Agriculture — Backend Test</h1>
+<p class="subtitle">Live test panel for the MVP demo · Backend: <code>http://localhost:3000</code></p>
+
+<div class="grid">
+
+  <!-- SENSOR CARD -->
+  <div class="card">
+    <h2><span class="status-dot"></span> &nbsp;Live Sensor Data <small style="color:#475569; font-weight:400; font-size:12px; margin-left:auto" id="lastUpdated">—</small></h2>
+    <div class="sensor-grid">
+      <div class="sensor-item">
+        <div class="sensor-label">Soil Moisture</div>
+        <div class="sensor-value" id="v-moisture">—</div>
+        <div class="sensor-unit">%</div>
+      </div>
+      <div class="sensor-item">
+        <div class="sensor-label">Temperature</div>
+        <div class="sensor-value" id="v-temp">—</div>
+        <div class="sensor-unit">°C</div>
+      </div>
+      <div class="sensor-item">
+        <div class="sensor-label">Humidity</div>
+        <div class="sensor-value" id="v-humidity">—</div>
+        <div class="sensor-unit">%</div>
+      </div>
+      <div class="sensor-item">
+        <div class="sensor-label">Pump Status</div>
+        <div class="sensor-value" id="v-pump">—</div>
+        <div class="sensor-unit">state</div>
+      </div>
+    </div>
+    <div class="recommendation-box" id="v-recommendation">Waiting for sensor data…</div>
+  </div>
+
+  <!-- DIAGNOSIS CARD -->
+  <div class="card">
+    <h2>🔬 AI Leaf Diagnosis</h2>
+
+    <div class="file-drop" id="dropZone" onclick="document.getElementById('fileInput').click()">
+      <input type="file" id="fileInput" accept="image/*" onchange="handleFile(this)">
+      <div style="font-size:32px">📷</div>
+      <p>Click to upload a leaf image<br>(JPG, PNG)</p>
+      <div class="file-name" id="fileName"></div>
+    </div>
+
+    <img id="preview" class="preview-img" alt="Leaf preview"/>
+
+    <button class="btn" id="scanBtn" onclick="runDiagnosis()" disabled>Scan Leaf Now</button>
+
+    <div class="spinner" id="spinner">🧠 AI analyzing image…</div>
+
+    <div class="result-box" id="resultBox">
+      <h3 id="resultTitle"></h3>
+      <div class="result-row"><span class="label">Status</span><span class="val" id="r-status"></span></div>
+      <div class="result-row"><span class="label">Disease</span><span class="val" id="r-disease"></span></div>
+      <div class="result-row"><span class="label">Confidence</span><span class="val" id="r-confidence"></span></div>
+      <div class="result-row"><span class="label">Severity</span><span class="val" id="r-severity"></span></div>
+      <hr style="border-color:#1e293b; margin: 8px 0"/>
+      <div style="color:#94a3b8; margin-bottom:4px">💊 Remedy</div>
+      <div id="r-remedy" style="margin-bottom:10px"></div>
+      <div style="color:#94a3b8; margin-bottom:4px">🛡️ Prevention</div>
+      <div id="r-prevention"></div>
+    </div>
+  </div>
+
+  <!-- HISTORY LOG -->
+  <div class="card history-section">
+    <h2>📋 Sensor History Log (last 10 readings)</h2>
+    <div class="history-log" id="historyLog">Waiting for data…</div>
+  </div>
+
+</div>
+
+<script>
+  const API = "http://localhost:3000";
+
+  // ── SENSOR POLLING ──────────────────────────────────────────────────────────
+  async function fetchLatest() {
+    try {
+      const res = await fetch(`${API}/api/latest`);
+      const json = await res.json();
+      if (!json.success || !json.data) return;
+      const d = json.data;
+
+      document.getElementById("v-moisture").textContent = d.soil_moisture ?? "—";
+      document.getElementById("v-temp").textContent = d.temperature ?? "—";
+      document.getElementById("v-humidity").textContent = d.humidity ?? "—";
+      document.getElementById("v-pump").textContent = d.pump_status === 1 ? "🟢 ON" : "🔴 OFF";
+      document.getElementById("v-recommendation").textContent = d.recommendation || "—";
+      document.getElementById("lastUpdated").textContent = new Date(d.timestamp).toLocaleTimeString();
+    } catch (e) {
+      document.getElementById("v-recommendation").textContent = "⚠️ Cannot reach backend on port 3000. Is it running?";
+    }
+  }
+
+  async function fetchHistory() {
+    try {
+      const res = await fetch(`${API}/api/history`);
+      const json = await res.json();
+      if (!json.success || !json.data?.length) return;
+      const log = document.getElementById("historyLog");
+      log.innerHTML = json.data.slice(-10).reverse().map(d => {
+        const cls = d.soil_moisture < 30 ? "moisture-low" : d.soil_moisture <= 60 ? "moisture-ok" : "moisture-good";
+        return `<div class="log-entry">
+          <span class="ts">${new Date(d.timestamp).toLocaleTimeString()}</span> &nbsp;
+          Moisture: <span class="${cls}">${d.soil_moisture}%</span> &nbsp;|&nbsp;
+          Temp: ${d.temperature}°C &nbsp;|&nbsp;
+          Humidity: ${d.humidity}% &nbsp;|&nbsp;
+          Pump: ${d.pump_status === 1 ? "ON" : "OFF"}
+        </div>`;
+      }).join("");
+    } catch(e) {}
+  }
+
+  setInterval(() => { fetchLatest(); fetchHistory(); }, 5000);
+  fetchLatest();
+  fetchHistory();
+
+  // ── DIAGNOSIS ───────────────────────────────────────────────────────────────
+  function handleFile(input) {
+    if (!input.files.length) return;
+    const file = input.files[0];
+    document.getElementById("fileName").textContent = file.name;
+    document.getElementById("scanBtn").disabled = false;
+
+    const reader = new FileReader();
+    reader.onload = e => {
+      const img = document.getElementById("preview");
+      img.src = e.target.result;
+      img.style.display = "block";
+    };
+    reader.readAsDataURL(file);
+
+    // Reset result
+    document.getElementById("resultBox").style.display = "none";
+  }
+
+  async function runDiagnosis() {
+    const fileInput = document.getElementById("fileInput");
+    if (!fileInput.files.length) return;
+
+    document.getElementById("scanBtn").disabled = true;
+    document.getElementById("spinner").style.display = "block";
+    document.getElementById("resultBox").style.display = "none";
+
+    const formData = new FormData();
+    formData.append("image", fileInput.files[0]);
+
+    try {
+      const res = await fetch(`${API}/api/v1/diagnose`, { method: "POST", body: formData });
+      const json = await res.json();
+      document.getElementById("spinner").style.display = "none";
+      document.getElementById("scanBtn").disabled = false;
+
+      const box = document.getElementById("resultBox");
+      box.style.display = "block";
+
+      if (json.success) {
+        const d = json.data;
+        box.className = "result-box success";
+        document.getElementById("resultTitle").textContent = d.isHealthy ? "✅ Leaf is Healthy!" : "⚠️ Disease Detected!";
+        document.getElementById("r-status").innerHTML = d.isHealthy
+          ? '<span class="disease-badge badge-healthy">HEALTHY</span>'
+          : '<span class="disease-badge badge-disease">DISEASED</span>';
+        document.getElementById("r-disease").textContent = d.disease || "None";
+        document.getElementById("r-confidence").textContent = `${(d.confidence * 100).toFixed(1)}%`;
+        document.getElementById("r-severity").textContent = d.severity?.toUpperCase() || "N/A";
+        document.getElementById("r-remedy").textContent = d.remedy;
+        document.getElementById("r-prevention").textContent = d.prevention;
+      } else {
+        box.className = "result-box error";
+        document.getElementById("resultTitle").textContent = "❌ Error";
+        document.getElementById("r-status").textContent = json.error?.message || "Unknown error";
+        ["r-disease","r-confidence","r-severity","r-remedy","r-prevention"].forEach(id => {
+          document.getElementById(id).textContent = "";
+        });
+      }
+    } catch (err) {
+      document.getElementById("spinner").style.display = "none";
+      document.getElementById("scanBtn").disabled = false;
+      const box = document.getElementById("resultBox");
+      box.style.display = "block";
+      box.className = "result-box error";
+      document.getElementById("resultTitle").textContent = "❌ Connection Error";
+      document.getElementById("r-status").textContent = "Cannot reach backend. Make sure 'npm run start' is running in the api folder.";
+      ["r-disease","r-confidence","r-severity","r-remedy","r-prevention"].forEach(id => {
+        document.getElementById(id).textContent = "";
+      });
+    }
+  }
+</script>
+</body>
+</html>

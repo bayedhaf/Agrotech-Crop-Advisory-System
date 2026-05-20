@@ -1,3 +1,41 @@
+# Smart Agriculture API — Render deployment
+
+This folder contains the Node.js Express API for the Smart Agriculture Monitoring System.
+
+Quick steps to deploy to Render:
+
+1. Push your repo to Git (make sure the `main` branch exists):
+
+```bash
+git add .
+git commit -m "Add Render manifest and deploy docs"
+git push origin main
+```
+
+2. Create a new Web Service on Render and connect your GitHub/GitLab repo, or use the `render.yaml` manifest for configuration.
+
+3. Required environment variables (do NOT store secrets in repo):
+
+- `PORT` (optional — Render provides one automatically)
+- `MQTT_BROKER_URL`, `MQTT_USERNAME`, `MQTT_PASSWORD` (if used)
+- `ROBofLOW_API_KEY` (if using Roboflow)
+- Any AI keys used by `@google/genai` or other services
+
+4. After creating the service, Render will run `npm install --prefix .` and start the app with `npm start --prefix .`.
+
+Local test:
+
+```bash
+# install deps
+npm install
+
+# run locally
+npm start
+
+# open http://localhost:3000/api/v1/health
+```
+
+If you want Render to build from another branch, update `branch` in `render.yaml`.
 # 🚀 Smart Agriculture API (Node.js + Express)
 
 Production-grade REST API for real-time IoT sensor data, AI-powered disease diagnosis, and hardware integrations.

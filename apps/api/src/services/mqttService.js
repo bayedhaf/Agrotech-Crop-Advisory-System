@@ -79,12 +79,19 @@ function initialize() {
       try {
         const payload = JSON.parse(message.toString());
         
-        // Extract and normalize fields to handle any minor format variations
-        const soilMoisture = Number(payload.soil_moisture !== undefined ? payload.soil_moisture : payload.soilMoisture);
-        const temperature = Number(payload.temperature !== undefined ? payload.temperature : payload.temp);
-        const humidity = Number(payload.humidity !== undefined ? payload.humidity : payload.hum);
-        const light = Number(payload.light !== undefined ? payload.light : payload.lightIntensity);
-        const pumpStatus = Number(payload.pump_status !== undefined ? payload.pump_status : payload.pumpStatus);
+        // Extract and normalize fields to handle the Wokwi nested format or flat format
+        const extractValue = (key1, key2, obj) => {
+          if (obj[key1] && obj[key1].Val !== undefined) return Number(obj[key1].Val);
+          if (obj[key1] !== undefined && typeof obj[key1] !== 'object') return Number(obj[key1]);
+          if (obj[key2] !== undefined && typeof obj[key2] !== 'object') return Number(obj[key2]);
+          return NaN;
+        };
+
+        const soilMoisture = extractValue("Soil_Moisture", "soil_moisture", payload);
+        const temperature = extractValue("Temperature", "temperature", payload);
+        const humidity = extractValue("Humidity", "humidity", payload);
+        const light = extractValue("Light", "light", payload);
+        const pumpStatus = extractValue("Pump_Status", "pump_status", payload);
 
         if (isNaN(soilMoisture) || isNaN(temperature) || isNaN(humidity)) {
           console.warn("⚠️ Received invalid or incomplete sensor reading:", payload);
