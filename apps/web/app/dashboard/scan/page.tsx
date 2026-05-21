@@ -181,7 +181,7 @@ function ThumbnailCard({
   );
 }
 
-const API_BASE = "";
+const API_BASE = "https://smart-agriculture-backend-2nk0.onrender.com";
 const LOCAL_HISTORY_KEY = "diagnose-history-v1";
 
 const toIsoString = (value?: string) => {

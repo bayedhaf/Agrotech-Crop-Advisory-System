@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 const navItems = [
   { name: "Overview", href: "/dashboard", icon: LayoutDashboard },
   { name: "AI Crop Diagnosis", href: "/dashboard/scan", icon: Sprout },
-  { name: "Weather", href: "#", icon: CloudRain },
+ 
   { name: "History", href: "/dashboard/history", icon: History },
   { name: "Settings", href: "/dashboard/profile", icon: Settings },
 ];
