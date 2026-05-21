@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { onAuthStateChanged, type User } from "firebase/auth";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -15,21 +17,49 @@ import {
   FileText,
   AlertTriangle,
   CheckCircle2,
+  Trash2,
+  RefreshCw,
+  Loader2,
   FlaskConical,
-  Droplets,
-  Activity,
   Cpu,
-  Clock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { auth } from "@/lib/firebase";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface ScanHistoryItem {
   id: string;
-  thumbnail: string;
+  imageUrl?: string;
+  disease?: string;
+  createdAt?: string;
+  source?: "api" | "local";
   selected?: boolean;
+  payload?: DiagnoseResponse;
 }
+
+type DiagnoseResponse = Record<string, unknown> & {
+  id?: string;
+  _id?: string;
+  diagnosisId?: string;
+  resultId?: string;
+  disease?: string;
+  status?: string;
+  severity?: string;
+  confidence?: number;
+  findings?: Array<{ title?: string; description?: string; status?: string }>;
+  treatments?: Array<{ title?: string; description?: string }>;
+  recommendations?: Array<{ title?: string; description?: string }>;
+  treatmentSteps?: Array<{ title?: string; description?: string }>;
+  vitality?: number;
+  healthScore?: number;
+  imageUrl?: string;
+  image?: string;
+  createdAt?: string;
+  created_at?: string;
+  model?: string;
+  latencyMs?: number;
+};
 
 interface DiagnosticFinding {
   id: string;
@@ -106,9 +136,11 @@ function TreatmentCard({ step }: { step: TreatmentStep }) {
 function ThumbnailCard({
   item,
   isEmpty,
+  onSelect,
 }: {
   item?: ScanHistoryItem;
   isEmpty?: boolean;
+  onSelect?: () => void;
 }) {
   if (isEmpty) {
     return (
@@ -119,33 +151,193 @@ function ThumbnailCard({
   }
 
   return (
-    <div
+    <button
       className={cn(
         "relative h-16 w-24 rounded-lg overflow-hidden cursor-pointer ring-2 transition-all",
         item?.selected
           ? "ring-emerald-500 shadow-[0_0_12px_#10b981aa]"
           : "ring-transparent hover:ring-zinc-500"
       )}
+      onClick={onSelect}
+      type="button"
     >
-      <div className="w-full h-full bg-zinc-700 flex items-center justify-center">
-        <div className="text-zinc-500 text-xs">IMG</div>
-      </div>
+      {item?.imageUrl ? (
+        <img
+          src={item.imageUrl}
+          alt={item.disease || "Crop scan"}
+          className="h-full w-full object-cover"
+        />
+      ) : (
+        <div className="w-full h-full bg-zinc-700 flex items-center justify-center">
+          <div className="text-zinc-500 text-xs">IMG</div>
+        </div>
+      )}
       {item?.selected && (
         <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
           <CheckCircle2 className="h-5 w-5 text-emerald-400" />
         </div>
       )}
-    </div>
+    </button>
   );
 }
+
+const API_BASE = "";
+const LOCAL_HISTORY_KEY = "diagnose-history-v1";
+
+const toIsoString = (value?: string) => {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
+};
+
+const extractHistoryItems = (payload: unknown): DiagnoseResponse[] => {
+  if (Array.isArray(payload)) {
+    return payload as DiagnoseResponse[];
+  }
+  if (!payload || typeof payload !== "object") {
+    return [];
+  }
+  const record = payload as Record<string, unknown>;
+  const candidates = [record.data, record.items, record.history, record.results];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate as DiagnoseResponse[];
+    }
+  }
+  return [];
+};
+
+const normalizeHistoryItem = (
+  entry: DiagnoseResponse,
+  source: "api" | "local"
+): ScanHistoryItem | null => {
+  const id = String(entry.id ?? entry._id ?? entry.diagnosisId ?? entry.resultId ?? "").trim();
+  if (!id) {
+    return null;
+  }
+  return {
+    id,
+    imageUrl: entry.imageUrl ?? entry.image ?? undefined,
+    disease: entry.disease ?? (entry.status ? String(entry.status) : undefined),
+    createdAt: toIsoString(entry.createdAt ?? entry.created_at),
+    source,
+  };
+};
+
+const normalizeFindings = (entry: DiagnoseResponse | null): DiagnosticFinding[] => {
+  if (!entry) {
+    return [];
+  }
+  if (Array.isArray(entry.findings)) {
+    return entry.findings.map((finding, index) => ({
+      id: String(index + 1),
+      status:
+        finding.status === "critical" || finding.status === "warning" || finding.status === "ok"
+          ? finding.status
+          : "warning",
+      title: finding.title ?? "Diagnostic finding",
+      description: finding.description ?? "No details provided.",
+    }));
+  }
+  if (entry.disease || entry.status) {
+    return [
+      {
+        id: "1",
+        status: entry.severity === "critical" ? "critical" : entry.severity === "ok" ? "ok" : "warning",
+        title: entry.disease ?? entry.status ?? "Diagnosis result",
+        description:
+          typeof entry.confidence === "number"
+            ? `Confidence: ${Math.round(entry.confidence * 100)}%`
+            : "Confidence data unavailable.",
+      },
+    ];
+  }
+  return [];
+};
+
+const extractDiagnosisPayload = (payload: unknown): DiagnoseResponse => {
+  if (!payload || typeof payload !== "object") {
+    return {} as DiagnoseResponse;
+  }
+  const record = payload as Record<string, unknown>;
+  if (record.data && typeof record.data === "object") {
+    return record.data as DiagnoseResponse;
+  }
+  return payload as DiagnoseResponse;
+};
+
+const normalizeTreatments = (entry: DiagnoseResponse | null): TreatmentStep[] => {
+  if (!entry) {
+    return [];
+  }
+  const candidates =
+    entry.treatments ??
+    entry.recommendations ??
+    (Array.isArray(entry.treatmentSteps) ? entry.treatmentSteps : undefined);
+  if (!Array.isArray(candidates)) {
+    return [];
+  }
+  return candidates.map((step, index) => ({
+    step: index + 1,
+    title: step.title ?? `Step ${index + 1}`,
+    description: step.description ?? "No details provided.",
+    active: index === 0,
+  }));
+};
+
+const normalizeVitality = (entry: DiagnoseResponse | null) => {
+  if (!entry) {
+    return null;
+  }
+  const score =
+    typeof entry.vitality === "number"
+      ? entry.vitality
+      : typeof entry.healthScore === "number"
+      ? entry.healthScore
+      : null;
+  if (score === null) {
+    return null;
+  }
+  const normalized = score <= 1 ? score * 100 : score;
+  return Math.max(0, Math.min(100, Math.round(normalized)));
+};
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const fetchWithRetry = async (input: RequestInfo, init: RequestInit, retries = 1) => {
+  let attempt = 0;
+  let response = await fetch(input, init);
+  while (response.status === 429 && attempt < retries) {
+    const delay = 1000 * (attempt + 1);
+    await sleep(delay);
+    attempt += 1;
+    response = await fetch(input, init);
+  }
+  return response;
+};
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function AIDiagnosticPage() {
+  const router = useRouter();
+  const [user, setUser] = useState<User | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [activeCamera, setActiveCamera] = useState(false);
-  const [scanProgress] = useState(78);
+  const [scanProgress, setScanProgress] = useState(0);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [diagnosis, setDiagnosis] = useState<DiagnoseResponse | null>(null);
+  const [findings, setFindings] = useState<DiagnosticFinding[]>([]);
+  const [treatments, setTreatments] = useState<TreatmentStep[]>([]);
+  const [history, setHistory] = useState<ScanHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -159,6 +351,20 @@ export default function AIDiagnosticPage() {
       videoRef.current.srcObject = null;
     }
   };
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      if (!currentUser) {
+        setIsAuthLoading(false);
+        router.replace("/login");
+        return;
+      }
+      setUser(currentUser);
+      setIsAuthLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [router]);
 
   useEffect(() => {
     return () => {
@@ -190,7 +396,7 @@ export default function AIDiagnosticPage() {
 
   useEffect(() => {
     return () => {
-      if (selectedImage) {
+      if (selectedImage?.startsWith("blob:")) {
         URL.revokeObjectURL(selectedImage);
       }
     };
@@ -206,52 +412,310 @@ export default function AIDiagnosticPage() {
     if (!file) {
       return;
     }
+    setSelectedFile(file);
     setSelectedImage(URL.createObjectURL(file));
+    setScanError(null);
+    setScanProgress(0);
     event.target.value = "";
   };
 
   const handleToggleCamera = () => {
     setSelectedImage(null);
+    setSelectedFile(null);
+    setScanProgress(0);
     setActiveCamera((prev) => !prev);
   };
 
-  const findings: DiagnosticFinding[] = [
-    {
-      id: "1",
-      status: "critical",
-      title: "Septoria Brown Spot detected",
-      description:
-        "Neural analysis indicates early stage fungal infection. Confidence level: 98.4%.",
-    },
-    {
-      id: "2",
-      status: "ok",
-      title: "Nutrient Levels Optimized",
-      description:
-        "Chlorophyll density remains within healthy standard deviation.",
-    },
-  ];
+  const captureFromCamera = async () => {
+    if (!videoRef.current) {
+      setCameraError("Camera is not ready.");
+      return;
+    }
+    const video = videoRef.current;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      setCameraError("Unable to capture image.");
+      return;
+    }
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", 0.92)
+    );
+    if (!blob) {
+      setCameraError("Unable to capture image.");
+      return;
+    }
+    const file = new File([blob], `capture-${Date.now()}.jpg`, {
+      type: blob.type || "image/jpeg",
+    });
+    setSelectedFile(file);
+    setSelectedImage(URL.createObjectURL(blob));
+    setScanProgress(0);
+    setActiveCamera(false);
+    setCameraError(null);
+  };
 
-  const treatments: TreatmentStep[] = [
-    {
-      step: 1,
-      title: "Step 1: Fungicide Application",
-      description: "Targeted spray of copper-based solution within 48 hours.",
-      active: true,
-    },
-    {
-      step: 2,
-      title: "Step 2: Hydration Adjustment",
-      description: "Reduce evening irrigation to limit leaf moisture duration.",
-      active: false,
-    },
-  ];
+  const loadLocalHistory = () => {
+    if (typeof window === "undefined") {
+      return [] as ScanHistoryItem[];
+    }
+    const stored = window.localStorage.getItem(LOCAL_HISTORY_KEY);
+    if (!stored) {
+      return [];
+    }
+    try {
+      const parsed = JSON.parse(stored) as ScanHistoryItem[];
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      return parsed;
+    } catch {
+      return [];
+    }
+  };
 
-  const thumbnails: ScanHistoryItem[] = [
-    { id: "1", thumbnail: "", selected: true },
-    { id: "2", thumbnail: "" },
-    { id: "3", thumbnail: "" },
-  ];
+  const saveLocalHistory = (items: ScanHistoryItem[]) => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(LOCAL_HISTORY_KEY, JSON.stringify(items));
+  };
+
+  const mergeHistory = (apiItems: ScanHistoryItem[], localItems: ScanHistoryItem[]) => {
+    const byId = new Map<string, ScanHistoryItem>();
+    [...localItems, ...apiItems].forEach((item) => {
+      byId.set(item.id, item);
+    });
+    return Array.from(byId.values()).sort((a, b) => {
+      const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return bTime - aTime;
+    });
+  };
+
+  const fetchHistory = async (currentUser: User) => {
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const token = await currentUser.getIdToken();
+      console.info("[diagnose] history request", {
+        url: `${API_BASE}/api/v1/diagnose/history`,
+      });
+      const response = await fetchWithRetry(`${API_BASE}/api/v1/diagnose/history`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      console.info("[diagnose] history response", {
+        status: response.status,
+        ok: response.ok,
+      });
+      if (response.status === 429) {
+        throw new Error("Rate limited. Please wait and try again.");
+      }
+      if (!response.ok) {
+        throw new Error(`Failed to load history (${response.status})`);
+      }
+      const payload = (await response.json()) as unknown;
+      const apiEntries = extractHistoryItems(payload)
+        .map((entry) => normalizeHistoryItem(entry, "api"))
+        .filter((item): item is ScanHistoryItem => item !== null);
+      const localItems = loadLocalHistory();
+      const merged = mergeHistory(apiEntries, localItems);
+      setHistory(merged);
+    } catch (error) {
+      console.error("[diagnose] history error", error);
+      setHistoryError(error instanceof Error ? error.message : "Unable to load history.");
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const loadDiagnosisById = async (id: string) => {
+    if (!user) {
+      return;
+    }
+    const cached = history.find((item) => item.id === id);
+    if (cached?.imageUrl) {
+      setSelectedImage(cached.imageUrl);
+    }
+    if (cached?.payload) {
+      setSelectedFile(null);
+      setActiveCamera(false);
+      setSelectedHistoryId(id);
+      setScanError(null);
+      setDiagnosis(cached.payload);
+      setFindings(normalizeFindings(cached.payload));
+      setTreatments(normalizeTreatments(cached.payload));
+      return;
+    }
+    setSelectedFile(null);
+    setActiveCamera(false);
+    setSelectedHistoryId(id);
+    setScanError(null);
+    try {
+      const token = await user.getIdToken();
+      console.info("[diagnose] detail request", {
+        url: `${API_BASE}/api/v1/diagnose/${id}`,
+      });
+      const response = await fetch(`${API_BASE}/api/v1/diagnose/${id}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      console.info("[diagnose] detail response", {
+        status: response.status,
+        ok: response.ok,
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to load diagnosis (${response.status})`);
+      }
+      const rawPayload = (await response.json()) as unknown;
+      const payload = extractDiagnosisPayload(rawPayload);
+      setDiagnosis(payload);
+      setFindings(normalizeFindings(payload));
+      setTreatments(normalizeTreatments(payload));
+    } catch (error) {
+      console.error("[diagnose] detail error", error);
+      setScanError(error instanceof Error ? error.message : "Unable to load diagnosis.");
+    }
+  };
+
+  const handleDeleteHistory = async (id: string) => {
+    if (!user) {
+      return;
+    }
+    setHistoryError(null);
+    try {
+      const token = await user.getIdToken();
+      console.info("[diagnose] delete request", {
+        url: `${API_BASE}/api/v1/diagnose/${id}`,
+      });
+      const response = await fetch(`${API_BASE}/api/v1/diagnose/${id}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      console.info("[diagnose] delete response", {
+        status: response.status,
+        ok: response.ok,
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to delete history (${response.status})`);
+      }
+      const localItems = loadLocalHistory().filter((item) => item.id !== id);
+      saveLocalHistory(localItems);
+      setHistory((prev) => prev.filter((item) => item.id !== id));
+      if (selectedHistoryId === id) {
+        setSelectedHistoryId(null);
+      }
+    } catch (error) {
+      console.error("[diagnose] delete error", error);
+      setHistoryError(error instanceof Error ? error.message : "Unable to delete history.");
+    }
+  };
+
+  const handleDiagnose = async () => {
+    if (!selectedFile) {
+      setScanError("Please upload or capture an image first.");
+      return;
+    }
+    if (!user) {
+      return;
+    }
+    setIsSubmitting(true);
+    setScanError(null);
+    setScanProgress(15);
+    try {
+      const token = await user.getIdToken();
+      const formData = new FormData();
+      formData.append("image", selectedFile);
+      console.info("[diagnose] submit request", {
+        url: `${API_BASE}/api/v1/diagnose`,
+        fileName: selectedFile.name,
+        fileSize: selectedFile.size,
+        fileType: selectedFile.type,
+      });
+      const response = await fetch(`${API_BASE}/api/v1/diagnose`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+      });
+      setScanProgress(70);
+      console.info("[diagnose] submit response", {
+        status: response.status,
+        ok: response.ok,
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `Diagnosis failed (${response.status})`);
+      }
+      const rawPayload = (await response.json()) as unknown;
+      const payload = extractDiagnosisPayload(rawPayload);
+      setScanProgress(100);
+      setDiagnosis(payload);
+      const normalizedFindings = normalizeFindings(payload);
+      const normalizedTreatments = normalizeTreatments(payload);
+      setFindings(normalizedFindings);
+      setTreatments(normalizedTreatments);
+
+      const normalizedItem = normalizeHistoryItem(payload, "local");
+      const historyItem: ScanHistoryItem = normalizedItem
+        ? { ...normalizedItem, payload }
+        : {
+            id: `${Date.now()}`,
+            imageUrl: selectedImage ?? undefined,
+            disease: payload.disease ?? payload.status ?? "Diagnosis",
+            createdAt: new Date().toISOString(),
+            source: "local",
+            payload,
+          };
+      const localItems = [historyItem, ...loadLocalHistory()];
+      saveLocalHistory(localItems);
+      setHistory((prev) => mergeHistory(prev, [historyItem]));
+      setSelectedHistoryId(historyItem.id);
+    } catch (error) {
+      console.error("[diagnose] submit error", error);
+      setScanProgress(0);
+      setScanError(error instanceof Error ? error.message : "Diagnosis failed.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  useEffect(() => {
+    if (user) {
+      void fetchHistory(user);
+    }
+  }, [user]);
+
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
+        <div className="flex items-center gap-2 text-sm text-zinc-400">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading scan workspace...
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return null;
+  }
+
+  const vitality = normalizeVitality(diagnosis);
+  const vitalityBadge = vitality !== null && vitality < 50 ? "Action Required" : "Monitoring";
+  const vitalityBadgeClass =
+    vitality !== null && vitality < 50
+      ? "text-xs bg-red-900/60 text-red-300 border border-red-700/50 hover:bg-red-900/60"
+      : "text-xs bg-emerald-900/40 text-emerald-300 border border-emerald-700/40 hover:bg-emerald-900/40";
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans p-6 md:p-8">
@@ -278,11 +742,12 @@ export default function AIDiagnosticPage() {
             onChange={handleFileChange}
           />
           {/* Upload / Camera Buttons */}
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-3">
             <Button
               variant="outline"
               className="flex-1 sm:flex-none gap-2 bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700 hover:text-white"
               onClick={handleUploadClick}
+              disabled={isSubmitting}
             >
               <Upload className="h-4 w-4" />
               Upload Image
@@ -295,11 +760,58 @@ export default function AIDiagnosticPage() {
                   : "bg-emerald-600 hover:bg-emerald-500 text-white"
               )}
               onClick={handleToggleCamera}
+              disabled={isSubmitting}
             >
               <Camera className="h-4 w-4" />
               {activeCamera ? "Stop Camera" : "Active Camera"}
             </Button>
+            {activeCamera ? (
+              <Button
+                variant="outline"
+                className="flex-1 sm:flex-none gap-2 bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700 hover:text-white"
+                onClick={captureFromCamera}
+                disabled={isSubmitting}
+              >
+                <Camera className="h-4 w-4" />
+                Capture Frame
+              </Button>
+            ) : null}
           </div>
+
+          <div className="flex flex-wrap gap-3">
+            <Button
+              className="flex-1 gap-2 bg-emerald-600 hover:bg-emerald-500 text-white"
+              onClick={handleDiagnose}
+              disabled={isSubmitting || !selectedFile}
+            >
+              {isSubmitting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <FileText className="h-4 w-4" />
+              )}
+              {isSubmitting ? "Running Diagnosis" : "Run Diagnosis"}
+            </Button>
+            <Button
+              variant="outline"
+              className="flex-1 sm:flex-none gap-2 bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700 hover:text-white"
+              onClick={() => fetchHistory(user)}
+              disabled={historyLoading}
+            >
+              <RefreshCw className={cn("h-4 w-4", historyLoading && "animate-spin")} />
+              Refresh History
+            </Button>
+          </div>
+
+          {scanProgress > 0 ? (
+            <Progress value={scanProgress} className="bg-zinc-800" />
+          ) : null}
+
+          {scanError ? (
+            <div className="flex items-center gap-2 text-sm text-red-300 bg-red-950/40 border border-red-800/50 rounded-lg px-3 py-2">
+              <AlertTriangle className="h-4 w-4" />
+              {scanError}
+            </div>
+          ) : null}
 
           {/* Camera Preview */}
           <div className="relative rounded-2xl overflow-hidden bg-zinc-900 border border-zinc-800 min-h-[320px] md:min-h-[400px]">
@@ -353,7 +865,11 @@ export default function AIDiagnosticPage() {
 
                 {/* Scan label */}
                 <div className="absolute -top-8 left-0 bg-emerald-500/90 text-white text-xs font-bold px-3 py-1 rounded backdrop-blur-sm">
-                  SCANNING: SEPTORIA<br />BROWN SPOT DETECTED
+                  {isSubmitting
+                    ? "SCANNING..."
+                    : diagnosis?.disease || diagnosis?.status
+                    ? `RESULT: ${diagnosis.disease ?? diagnosis.status}`
+                    : "READY FOR SCAN"}
                 </div>
 
                 {/* Scan line animation */}
@@ -395,11 +911,15 @@ export default function AIDiagnosticPage() {
             <p className="text-xs font-semibold tracking-widest text-zinc-500 uppercase mb-3">
               Recent Uploads
             </p>
-            <div className="flex gap-3">
-              {thumbnails.map((item) => (
-                <ThumbnailCard key={item.id} item={item} />
+            <div className="flex gap-3 flex-wrap">
+              {history.slice(0, 4).map((item) => (
+                <ThumbnailCard
+                  key={item.id}
+                  item={{ ...item, selected: item.id === selectedHistoryId }}
+                  onSelect={() => loadDiagnosisById(item.id)}
+                />
               ))}
-              <ThumbnailCard isEmpty />
+              {history.length === 0 ? <ThumbnailCard isEmpty /> : null}
             </div>
           </div>
         </div>
@@ -416,31 +936,30 @@ export default function AIDiagnosticPage() {
               <span className="text-xs font-semibold tracking-widest text-zinc-500 uppercase">
                 Vitality Index
               </span>
-              <Badge
-                variant="destructive"
-                className="text-xs bg-red-900/60 text-red-300 border border-red-700/50 hover:bg-red-900/60"
-              >
-                Action Required
+              <Badge variant="outline" className={vitalityBadgeClass}>
+                {vitalityBadge}
               </Badge>
             </div>
             <div className="flex items-end gap-2">
               <span className="text-5xl font-black text-emerald-400 leading-none">
-                64%
+                {vitality !== null ? `${vitality}%` : "--"}
               </span>
               <span className="text-sm text-zinc-400 mb-1">
-                Critical Threshold
+                {vitality !== null ? "Live Score" : "Awaiting scan"}
               </span>
             </div>
-            <VitalityMeter value={64} />
+            <VitalityMeter value={vitality ?? 0} />
           </div>
 
           <Separator className="bg-zinc-800" />
 
           {/* Findings */}
           <div className="space-y-3">
-            {findings.map((f) => (
-              <FindingRow key={f.id} finding={f} />
-            ))}
+            {findings.length === 0 ? (
+              <p className="text-xs text-zinc-500">No findings yet. Run a scan to view results.</p>
+            ) : (
+              findings.map((f) => <FindingRow key={f.id} finding={f} />)
+            )}
           </div>
 
           <Separator className="bg-zinc-800" />
@@ -454,9 +973,11 @@ export default function AIDiagnosticPage() {
               </p>
             </div>
             <div className="space-y-2">
-              {treatments.map((t) => (
-                <TreatmentCard key={t.step} step={t} />
-              ))}
+              {treatments.length === 0 ? (
+                <p className="text-xs text-zinc-500">No treatment steps available.</p>
+              ) : (
+                treatments.map((t) => <TreatmentCard key={t.step} step={t} />)
+              )}
             </div>
           </div>
 
@@ -476,26 +997,37 @@ export default function AIDiagnosticPage() {
                   Model
                 </p>
                 <p className="text-zinc-300 font-mono font-semibold">
-                  AGRI-PRO-V4.2
+                  {diagnosis?.model ?? "API"}
                 </p>
               </div>
               <div className="bg-zinc-800/40 rounded-lg p-2.5">
                 <p className="text-zinc-600 uppercase tracking-wider text-[10px] mb-0.5">
-                  GPU Load
+                  Confidence
                 </p>
-                <p className="text-zinc-300 font-mono font-semibold">24%</p>
+                <p className="text-zinc-300 font-mono font-semibold">
+                  {typeof diagnosis?.confidence === "number"
+                    ? `${Math.round(diagnosis.confidence * 100)}%`
+                    : "--"}
+                </p>
               </div>
               <div className="bg-zinc-800/40 rounded-lg p-2.5">
                 <p className="text-zinc-600 uppercase tracking-wider text-[10px] mb-0.5">
                   Latency
                 </p>
-                <p className="text-zinc-300 font-mono font-semibold">142ms</p>
+                <p className="text-zinc-300 font-mono font-semibold">
+                  {typeof diagnosis?.latencyMs === "number"
+                    ? `${Math.round(diagnosis.latencyMs)}ms`
+                    : "--"}
+                </p>
               </div>
             </div>
           </div>
 
           {/* Generate Report CTA */}
-          <Button className="w-full gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold shadow-[0_0_24px_#10b98133] hover:shadow-[0_0_32px_#10b98155] transition-all">
+          <Button
+            className="w-full gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold shadow-[0_0_24px_#10b98133] hover:shadow-[0_0_32px_#10b98155] transition-all"
+            disabled={!diagnosis}
+          >
             <FileText className="h-4 w-4" />
             Generate Full Report
           </Button>

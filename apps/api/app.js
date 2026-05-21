@@ -7,25 +7,14 @@ const cors = require("cors");
 const diagnoseRoutes = require("./src/routes/diagnose.routes");
 const healthRoutes = require("./src/routes/health.routes");
 const sensorAnalysisRoutes = require("./src/routes/sensor-analysis.routes");
+const mqttRoutes = require("./src/routes/mqtt.routes");
 
 const app = express();
 
-// ─── CORS ─────────────────────────────────────────────────────────────────────
-const allowedOrigins = process.env.NODE_ENV === "production"
-  ? process.env.CORS_ORIGIN?.split(",")?.map((o) => o.trim()) || []
-  : ["http://localhost:3000"];
-
 app.use(
   cors({
-    origin: (origin, callback) => {
-      // Allow requests with no origin (e.g. mobile apps, curl)
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error(`CORS: origin ${origin} not allowed`));
-      }
-    },
-    credentials: true,
+    origin: "*", // Allow all origins for MVP testing to prevent Live Server or Next.js port conflicts
+    credentials: false // Must be false when origin is "*"
   })
 );
 
@@ -37,6 +26,7 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use("/api/v1/health", healthRoutes);
 app.use("/api/v1/diagnose", diagnoseRoutes);
 app.use("/api/v1/sensor-analysis", sensorAnalysisRoutes);
+app.use("/api", mqttRoutes);
 
 // ─── 404 handler ─────────────────────────────────────────────────────────────
 app.use((_req, res) => {

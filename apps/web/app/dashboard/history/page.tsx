@@ -1,263 +1,334 @@
 "use client";
 
-import { useState } from "react";
-import Image from "next/image";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ChevronRight, RotateCcw, Home, Camera, History as HistoryIcon, Settings as SettingsIcon } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { onAuthStateChanged, type User } from "firebase/auth";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { auth } from "@/lib/firebase";
 import { cn } from "@/lib/utils";
+import { AlertTriangle, Loader2, RefreshCw, Trash2 } from "lucide-react";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+type DiagnoseResponse = Record<string, unknown> & {
+	id?: string;
+	_id?: string;
+	diagnosisId?: string;
+	resultId?: string;
+	disease?: string;
+	status?: string;
+	severity?: string;
+	confidence?: number;
+	imageUrl?: string;
+	image?: string;
+	createdAt?: string;
+	created_at?: string;
+};
 
-type CropType = "All" | "Maize" | "Tomato" | "Teff";
+type ScanHistoryItem = {
+	id: string;
+	imageUrl?: string;
+	disease?: string;
+	createdAt?: string;
+	source?: "api" | "local";
+	confidence?: number;
+	severity?: string;
+	payload?: DiagnoseResponse;
+};
 
-interface ScanHistoryItem {
-    id: string;
-    cropType: string;
-    fieldName: string;
-    condition: string;
-    statusLabel: string;
-    statusColor: string;
-    confidence: number;
-    timestamp: string;
-    date: string;
-    thumbnailUrl: string;
-}
+const API_BASE = "";
+const LOCAL_HISTORY_KEY = "diagnose-history-v1";
 
-// ─── Mock Data ────────────────────────────────────────────────────────────────
+const toIsoString = (value?: string) => {
+	if (!value) {
+		return undefined;
+	}
+	const parsed = new Date(value);
+	return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
+};
 
-const mockScans: ScanHistoryItem[] = [
-    {
-        id: "1",
-        cropType: "MAIZE",
-        fieldName: "FIELD ALPHA",
-        condition: "Blight Detected",
-        statusLabel: "Blight",
-        statusColor: "bg-[#8B1538] text-white",
-        confidence: 84,
-        timestamp: "2h\nago",
-        date: "Today",
-        thumbnailUrl: "/uploads/maize.png",
-    },
-    {
-        id: "2",
-        cropType: "TOMATO",
-        fieldName: "WEST RIDGE",
-        condition: "Optimal Condition",
-        statusLabel: "Healthy",
-        statusColor: "bg-[#2D5F3F] text-white",
-        confidence: 99,
-        timestamp: "Yesterday",
-        date: "Yesterday",
-        thumbnailUrl: "/uploads/tomatoes.png",
-    },
-    {
-        id: "3",
-        cropType: "TEFF",
-        fieldName: "SOUTH BASIN",
-        condition: "Rust Infection",
-        statusLabel: "Rust",
-        statusColor: "bg-[#B8860B] text-white",
-        confidence: 76,
-        timestamp: "3\ndays\nago",
-        date: "MARCH 14, 2024",
-        thumbnailUrl: "/uploads/teff.png",
-    },
-    {
-        id: "4",
-        cropType: "TOMATO",
-        fieldName: "GREENHOUSE B",
-        condition: "Mildew Warning",
-        statusLabel: "Mildew",
-        statusColor: "bg-[#2D5F3F] text-white",
-        confidence: 62,
-        timestamp: "Last\nweek",
-        date: "MARCH 14, 2024",
-        thumbnailUrl: "/uploads/tomatoes.png",
-    },
-];
+const extractHistoryItems = (payload: unknown): DiagnoseResponse[] => {
+	if (Array.isArray(payload)) {
+		return payload as DiagnoseResponse[];
+	}
+	if (!payload || typeof payload !== "object") {
+		return [];
+	}
+	const record = payload as Record<string, unknown>;
+	const candidates = [record.data, record.items, record.history, record.results];
+	for (const candidate of candidates) {
+		if (Array.isArray(candidate)) {
+			return candidate as DiagnoseResponse[];
+		}
+	}
+	return [];
+};
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
+const normalizeHistoryItem = (
+	entry: DiagnoseResponse,
+	source: "api" | "local"
+): ScanHistoryItem | null => {
+	const id = String(entry.id ?? entry._id ?? entry.diagnosisId ?? entry.resultId ?? "").trim();
+	if (!id) {
+		return null;
+	}
+	return {
+		id,
+		imageUrl: entry.imageUrl ?? entry.image ?? undefined,
+		disease: entry.disease ?? (entry.status ? String(entry.status) : undefined),
+		createdAt: toIsoString(entry.createdAt ?? entry.created_at),
+		source,
+		confidence: entry.confidence,
+		severity: entry.severity,
+	};
+};
 
-function ScanCard({ scan }: { scan: ScanHistoryItem }) {
-    return (
-        <div className="bg-[#1C1C1E] rounded-2xl p-4 hover:bg-[#232325] transition-all cursor-pointer group relative">
-            <div className="flex gap-3">
-                {/* Thumbnail */}
-                <div className="w-[88px] h-[88px] rounded-xl bg-[#2C2C2E] flex-shrink-0 overflow-hidden relative">
-                    <Image
-                        src={scan.thumbnailUrl}
-                        alt={scan.condition}
-                        fill
-                        className="object-cover"
-                    />
-                </div>
+const loadLocalHistory = (): ScanHistoryItem[] => {
+	if (typeof window === "undefined") {
+		return [];
+	}
+	const stored = window.localStorage.getItem(LOCAL_HISTORY_KEY);
+	if (!stored) {
+		return [];
+	}
+	try {
+		const parsed = JSON.parse(stored) as ScanHistoryItem[];
+		return Array.isArray(parsed) ? parsed : [];
+	} catch {
+		return [];
+	}
+};
 
-                {/* Content */}
-                <div className="flex-1 min-w-0 flex flex-col justify-between py-1">
-                    {/* Top section */}
-                    <div>
-                        <p className="text-[10px] text-[#8E8E93] uppercase tracking-[0.08em] font-medium mb-1.5">
-                            {scan.cropType} • {scan.fieldName}
-                        </p>
-                        <h3 className="text-[17px] font-semibold text-white leading-tight mb-2.5">
-                            {scan.condition}
-                        </h3>
-                    </div>
+const saveLocalHistory = (items: ScanHistoryItem[]) => {
+	if (typeof window === "undefined") {
+		return;
+	}
+	window.localStorage.setItem(LOCAL_HISTORY_KEY, JSON.stringify(items));
+};
 
-                    {/* Bottom section */}
-                    <div className="flex items-center gap-2">
-                        <span className={cn(
-                            "inline-flex items-center justify-center px-2.5 py-1 rounded-md text-[11px] font-semibold",
-                            scan.statusColor
-                        )}>
-                            {scan.statusLabel}
-                        </span>
-                        <span className="text-[11px] text-[#8E8E93]">
-                            • {scan.confidence}% Confidence
-                        </span>
-                    </div>
-                </div>
+const mergeHistory = (apiItems: ScanHistoryItem[], localItems: ScanHistoryItem[]) => {
+	const byId = new Map<string, ScanHistoryItem>();
+	[...localItems, ...apiItems].forEach((item) => {
+		byId.set(item.id, item);
+	});
+	return Array.from(byId.values()).sort((a, b) => {
+		const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+		const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+		return bTime - aTime;
+	});
+};
 
-                {/* Right section - timestamp and arrow */}
-                <div className="flex flex-col items-end justify-between py-1">
-                    <span className="text-[11px] text-[#8E8E93] text-right whitespace-pre-line leading-tight">
-                        {scan.timestamp}
-                    </span>
-                    <ChevronRight className="h-5 w-5 text-[#48484A] group-hover:text-[#34C759] transition-colors" />
-                </div>
-            </div>
-        </div>
-    );
-}
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function DateSeparator({ date }: { date: string }) {
-    return (
-        <div className="mb-3 mt-6 first:mt-0">
-            <p className="text-[11px] font-semibold tracking-[0.1em] text-[#48484A] uppercase">
-                {date}
-            </p>
-        </div>
-    );
-}
+const fetchWithRetry = async (input: RequestInfo, init: RequestInit, retries = 1) => {
+	let attempt = 0;
+	let response = await fetch(input, init);
+	while (response.status === 429 && attempt < retries) {
+		const delay = 1000 * (attempt + 1);
+		await sleep(delay);
+		attempt += 1;
+		response = await fetch(input, init);
+	}
+	return response;
+};
 
-// ─── Main Page ────────────────────────────────────────────────────────────────
+export default function HistoryPage() {
+	const router = useRouter();
+	const [user, setUser] = useState<User | null>(null);
+	const [isAuthLoading, setIsAuthLoading] = useState(true);
+	const [history, setHistory] = useState<ScanHistoryItem[]>([]);
+	const [isLoading, setIsLoading] = useState(false);
+	const [error, setError] = useState<string | null>(null);
 
-export default function ScanHistoryPage() {
-    const [selectedFilter, setSelectedFilter] = useState<CropType>("All");
+	useEffect(() => {
+		const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+			if (!currentUser) {
+				setIsAuthLoading(false);
+				router.replace("/login");
+				return;
+			}
+			setUser(currentUser);
+			setIsAuthLoading(false);
+		});
 
-    const filters: CropType[] = ["All", "Maize", "Tomato", "Teff"];
+		return () => unsubscribe();
+	}, [router]);
 
-    // Filter scans based on selected crop type
-    const filteredScans =
-        selectedFilter === "All"
-            ? mockScans
-            : mockScans.filter(
-                (scan) => scan.cropType.toLowerCase() === selectedFilter.toLowerCase()
-            );
+	const fetchHistory = async (currentUser: User) => {
+		setIsLoading(true);
+		setError(null);
+		try {
+			const token = await currentUser.getIdToken();
+			const response = await fetchWithRetry(`${API_BASE}/api/v1/diagnose/history`, {
+				headers: {
+					Authorization: `Bearer ${token}`,
+				},
+			});
+			if (response.status === 429) {
+				throw new Error("Rate limited. Please wait and try again.");
+			}
+			if (!response.ok) {
+				throw new Error(`Failed to load history (${response.status})`);
+			}
+			const payload = (await response.json()) as unknown;
+			const apiEntries = extractHistoryItems(payload)
+				.map((entry) => normalizeHistoryItem(entry, "api"))
+				.filter((item): item is ScanHistoryItem => item !== null);
+			const localItems = loadLocalHistory();
+			setHistory(mergeHistory(apiEntries, localItems));
+		} catch (err) {
+			setError(err instanceof Error ? err.message : "Unable to load history.");
+		} finally {
+			setIsLoading(false);
+		}
+	};
 
-    // Group scans by date
-    const groupedScans = filteredScans.reduce((acc, scan) => {
-        if (!acc[scan.date]) {
-            acc[scan.date] = [];
-        }
-        acc[scan.date].push(scan);
-        return acc;
-    }, {} as Record<string, ScanHistoryItem[]>);
+	const handleDelete = async (id: string) => {
+		if (!user) {
+			return;
+		}
+		setError(null);
+		try {
+			const token = await user.getIdToken();
+			const response = await fetch(`${API_BASE}/api/v1/diagnose/${id}`, {
+				method: "DELETE",
+				headers: {
+					Authorization: `Bearer ${token}`,
+				},
+			});
+			if (!response.ok) {
+				throw new Error(`Failed to delete history (${response.status})`);
+			}
+			const updatedLocal = loadLocalHistory().filter((item) => item.id !== id);
+			saveLocalHistory(updatedLocal);
+			setHistory((prev) => prev.filter((item) => item.id !== id));
+		} catch (err) {
+			setError(err instanceof Error ? err.message : "Unable to delete history.");
+		}
+	};
 
-    return (
-        <div className="min-h-screen bg-[#000000] text-white">
-            {/* ── Main Content ── */}
-            <div className="px-5 pt-6 pb-24 lg:pb-6">
-                {/* Page Title */}
-                <div className="mb-6">
-                    <h1 className="text-[32px] font-bold text-white leading-tight mb-1.5">
-                        Scan History
-                    </h1>
-                    <p className="text-[14px] text-[#8E8E93] leading-relaxed">
-                        Analysis reports for all your monitored fields.
-                    </p>
-                </div>
+	useEffect(() => {
+		if (user) {
+			void fetchHistory(user);
+		}
+	}, [user]);
 
-                {/* Filter Tabs */}
-                <div className="flex gap-2 mb-6 overflow-x-auto pb-2 scrollbar-hide">
-                    {filters.map((filter) => (
-                        <button
-                            key={filter}
-                            onClick={() => setSelectedFilter(filter)}
-                            className={cn(
-                                "px-5 py-2 rounded-lg font-semibold text-[13px] whitespace-nowrap transition-all",
-                                selectedFilter === filter
-                                    ? "bg-[#34C759] text-white"
-                                    : "bg-[#1C1C1E] text-[#8E8E93] hover:bg-[#2C2C2E] hover:text-white"
-                            )}
-                        >
-                            {filter}
-                        </button>
-                    ))}
-                </div>
+	const hasHistory = history.length > 0;
+	const filteredHistory = useMemo(() => history, [history]);
 
-                {/* Scan History List */}
-                <div>
-                    {Object.entries(groupedScans).map(([date, scans]) => (
-                        <div key={date}>
-                            <DateSeparator date={date} />
-                            <div className="space-y-3">
-                                {scans.map((scan) => (
-                                    <ScanCard key={scan.id} scan={scan} />
-                                ))}
-                            </div>
-                        </div>
-                    ))}
-                </div>
+	if (isAuthLoading) {
+		return (
+			<div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
+				<div className="flex items-center gap-2 text-sm text-zinc-400">
+					<Loader2 className="h-4 w-4 animate-spin" />
+					Loading history...
+				</div>
+			</div>
+		);
+	}
 
-                {/* Load Full Archives Button */}
-                <div className="mt-10 flex justify-center">
-                    <button className="flex items-center gap-2.5 px-10 py-3 rounded-lg border border-[#3A3A3C] bg-transparent text-[#FFFFFF] hover:bg-[#1C1C1E] transition-all">
-                        <RotateCcw className="h-4 w-4" />
-                        <span className="text-[14px] font-medium">Load Full Archives</span>
-                    </button>
-                </div>
-            </div>
+	if (!user) {
+		return null;
+	}
 
-            {/* ── Bottom Navigation (Mobile) ── */}
-            <div className="fixed bottom-0 inset-x-0 bg-[#1C1C1E]/95 backdrop-blur-md border-t border-[#2C2C2E] lg:hidden">
-                <div className="flex items-center justify-around px-2 py-3">
-                    {/* Fields */}
-                    <Link href="/dashboard" className="flex flex-col items-center gap-1 px-4 py-1.5 text-[#8E8E93] hover:text-white transition-colors">
-                        <Home className="w-6 h-6" />
-                        <span className="text-[10px] font-medium">Fields</span>
-                    </Link>
+	return (
+		<div className="min-h-screen bg-zinc-950 text-zinc-100 p-6 md:p-8">
+			<header className="flex flex-wrap items-center justify-between gap-4 mb-6">
+				<div>
+					<h1 className="text-2xl font-semibold">Diagnosis History</h1>
+					<p className="text-sm text-zinc-400">Review past crop scans and revisit detailed results.</p>
+				</div>
+				<Button
+					variant="outline"
+					className="gap-2 bg-zinc-900 border-zinc-700 text-zinc-200 hover:bg-zinc-800"
+					onClick={() => fetchHistory(user)}
+					disabled={isLoading}
+				>
+					<RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} />
+					Refresh
+				</Button>
+			</header>
 
-                    {/* Scan */}
-                    <Link href="/dashboard/scan" className="flex flex-col items-center gap-1 px-4 py-1.5 text-[#8E8E93] hover:text-white transition-colors">
-                        <Camera className="w-6 h-6" />
-                        <span className="text-[10px] font-medium">Scan</span>
-                    </Link>
+			{error ? (
+				<div className="mb-4 flex items-center gap-2 text-sm text-red-300 bg-red-950/40 border border-red-800/50 rounded-lg px-3 py-2">
+					<AlertTriangle className="h-4 w-4" />
+					{error}
+				</div>
+			) : null}
 
-                    {/* History - Active */}
-                    <Link href="/dashboard/history" className="flex flex-col items-center gap-1 px-4 py-1.5 text-[#34C759] transition-colors">
-                        <HistoryIcon className="w-6 h-6 fill-current" />
-                        <span className="text-[10px] font-semibold">History</span>
-                    </Link>
+			<div className="rounded-2xl border border-zinc-800 bg-zinc-900/60">
+				<div className="flex items-center justify-between px-5 py-4">
+					<p className="text-sm font-semibold text-zinc-200">Recent Diagnoses</p>
+					<span className="text-xs text-zinc-500">{filteredHistory.length} entries</span>
+				</div>
+				<Separator className="bg-zinc-800" />
 
-                    {/* Settings */}
-                    <Link href="/dashboard/settings" className="flex flex-col items-center gap-1 px-4 py-1.5 text-[#8E8E93] hover:text-white transition-colors">
-                        <SettingsIcon className="w-6 h-6" />
-                        <span className="text-[10px] font-medium">Settings</span>
-                    </Link>
-                </div>
-            </div>
-
-            {/* Hide scrollbar */}
-            <style jsx>{`
-        .scrollbar-hide::-webkit-scrollbar {
-          display: none;
-        }
-        .scrollbar-hide {
-          -ms-overflow-style: none;
-          scrollbar-width: none;
-        }
-      `}</style>
-        </div>
-    );
+				{!hasHistory && !isLoading ? (
+					<div className="px-5 py-12 text-center text-sm text-zinc-500">No history yet.</div>
+				) : (
+					<div className="divide-y divide-zinc-800">
+						{filteredHistory.map((item) => (
+							<div key={item.id} className="flex flex-wrap items-center gap-4 px-5 py-4">
+								<div className="h-14 w-20 rounded-lg overflow-hidden bg-zinc-800">
+									{item.imageUrl ? (
+										<img
+											src={item.imageUrl}
+											alt={item.disease || "Diagnosis"}
+											className="h-full w-full object-cover"
+										/>
+									) : null}
+								</div>
+								<div className="flex-1 min-w-[200px]">
+									<p className="text-sm font-semibold text-zinc-100">
+										{item.disease ?? "Diagnosis"}
+									</p>
+									<p className="text-xs text-zinc-500">
+										{item.createdAt ? new Date(item.createdAt).toLocaleString() : "Timestamp unavailable"}
+									</p>
+								</div>
+								<div className="flex items-center gap-2">
+									{typeof item.confidence === "number" ? (
+										<Badge variant="outline" className="text-xs border-emerald-700/40 text-emerald-300">
+											{Math.round(item.confidence * 100)}% confidence
+										</Badge>
+									) : null}
+									{item.severity ? (
+										<Badge
+											variant="outline"
+											className={cn(
+												"text-xs",
+												item.severity === "critical"
+													? "border-red-700/50 text-red-300"
+													: "border-amber-700/40 text-amber-300"
+											)}
+										>
+											{item.severity}
+										</Badge>
+									) : null}
+								</div>
+								<div className="flex items-center gap-2">
+									<Link
+										href={`/dashboard/history/${item.id}`}
+										className="text-xs font-semibold text-emerald-300 hover:text-emerald-200"
+									>
+										View details
+									</Link>
+									<Button
+										variant="ghost"
+										size="icon"
+										className="text-zinc-400 hover:text-red-300"
+										onClick={() => handleDelete(item.id)}
+									>
+										<Trash2 className="h-4 w-4" />
+									</Button>
+								</div>
+							</div>
+						))}
+					</div>
+				)}
+			</div>
+		</div>
+	);
 }

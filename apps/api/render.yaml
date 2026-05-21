@@ -1,0 +1,13 @@
+services:
+  - type: web_service
+    name: smart-agriculture-api
+    env: node
+    plan: free
+    branch: main
+    buildCommand: "npm install --prefix ."
+    startCommand: "npm start --prefix ."
+    envVars:
+      - key: NODE_ENV
+        value: production
+    autoDeploy: true
+    root: .

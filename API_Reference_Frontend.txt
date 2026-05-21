@@ -1,0 +1,211 @@
+================================================================
+  SMART AGRICULTURE MONITORING SYSTEM — BACKEND API REFERENCE
+  For: Frontend (SE/CSE) Development Team
+  Base URL (Local):      http://localhost:3000
+  Base URL (Production): https://YOUR_APP.onrender.com
+================================================================
+
+----------------------------------------------------------------
+1. GET /api/latest
+   Purpose: Get the LATEST single sensor reading from the ESP32
+   Auth:    None required
+----------------------------------------------------------------
+
+REQUEST:
+  GET http://localhost:3000/api/latest
+
+RESPONSE:
+  {
+    "success": true,
+    "data": {
+      "soil_moisture": 31,
+      "temperature":   26.9,
+      "humidity":      83.6,
+      "light":         2144,
+      "pump_status":   1,
+      "recommendation": "Soil moisture acceptable (30-60%). Monitor closely.",
+      "timestamp":     "2026-05-20T19:19:35.080Z"
+    }
+  }
+
+NOTE: Poll this endpoint every 5 seconds for a live dashboard effect.
+
+
+----------------------------------------------------------------
+2. GET /api/history
+   Purpose: Get the last 50 sensor readings for charts/graphs
+   Auth:    None required
+----------------------------------------------------------------
+
+REQUEST:
+  GET http://localhost:3000/api/history
+
+RESPONSE:
+  {
+    "success": true,
+    "count": 50,
+    "data": [
+      {
+        "soil_moisture": 31,
+        "temperature":   26.9,
+        "humidity":      83.6,
+        "light":         2144,
+        "pump_status":   1,
+        "recommendation": "Soil moisture acceptable (30-60%). Monitor closely.",
+        "timestamp":     "2026-05-20T19:19:35.080Z"
+      },
+      { "...": "up to 50 readings, oldest first" }
+    ]
+  }
+
+NOTE: Use `data` array directly to feed Recharts or Chart.js.
+
+
+----------------------------------------------------------------
+3. POST /api/v1/diagnose
+   Purpose: Upload a leaf image → get AI disease diagnosis
+   Auth:    None required
+   Body:    multipart/form-data
+   Field:   "image" (file — JPG or PNG)
+----------------------------------------------------------------
+
+REQUEST (JavaScript example):
+  const formData = new FormData();
+  formData.append("image", fileInput.files[0]);
+  const res = await fetch("http://localhost:3000/api/v1/diagnose", {
+    method: "POST",
+    body: formData
+  });
+  const json = await res.json();
+
+RESPONSE (Diseased Leaf):
+  {
+    "success": true,
+    "data": {
+      "diagnosisId":  "mock-diag-1779307190086",
+      "isHealthy":    false,
+      "disease":      "Common Rust",
+      "confidence":   0.89,
+      "severity":     "high",
+      "remedy":       "Apply copper-based fungicides immediately. Remove and destroy severely affected leaves.",
+      "prevention":   "Plant rust-resistant crop hybrids, practice crop rotation.",
+      "description":  "Detected symptoms of 'Common Rust' on the crop leaf (Confidence: 89.0%).",
+      "imageUrl":     "https://storage.googleapis.com/mock-bucket/mock-leaf-image.jpg",
+      "userId":       "mock-dev-farmer",
+      "createdAt":    "2026-05-20T19:59:50.086Z"
+    }
+  }
+
+RESPONSE (Healthy Leaf):
+  {
+    "success": true,
+    "data": {
+      "diagnosisId":  "mock-diag-1779307190087",
+      "isHealthy":    true,
+      "disease":      null,
+      "confidence":   1.0,
+      "severity":     "none",
+      "remedy":       "No treatment needed. Keep maintaining current crop care and nutrition practices.",
+      "prevention":   "Continue regular weeding, balanced nitrogen fertilization, and routine monitoring.",
+      "description":  "No plant disease symptoms or anomalies were detected on the leaf.",
+      "createdAt":    "2026-05-20T19:59:50.086Z"
+    }
+  }
+
+
+----------------------------------------------------------------
+4. POST /api/pump
+   Purpose: Send ON or OFF command to the physical pump (ESP32)
+   Auth:    None required
+   Body:    application/json
+----------------------------------------------------------------
+
+REQUEST:
+  POST http://localhost:3000/api/pump
+  Content-Type: application/json
+  Body: { "state": "ON" }
+    or  { "state": "OFF" }
+
+RESPONSE:
+  { "success": true, "message": "Pump command 'ON' sent successfully." }
+
+
+----------------------------------------------------------------
+5. GET /api/v1/health
+   Purpose: Check if the backend server is running
+----------------------------------------------------------------
+
+REQUEST:
+  GET http://localhost:3000/api/v1/health
+
+RESPONSE:
+  {
+    "success": true,
+    "status": "ok",
+    "uptime": 3600.5,
+    "timestamp": "2026-05-20T19:00:00.000Z"
+  }
+
+
+================================================================
+  FIELD REFERENCE TABLE
+================================================================
+
+  Field          | Type    | Values / Notes
+  ---------------|---------|--------------------------------------
+  soil_moisture  | number  | 0 to 100 (percent)
+  temperature    | number  | Celsius (e.g. 26.9)
+  humidity       | number  | 0 to 100 (percent)
+  light          | number  | Lux value (e.g. 2144)
+  pump_status    | number  | 0 = OFF,  1 = ON
+  recommendation | string  | Auto-generated agricultural advice
+  isHealthy      | boolean | true = healthy,  false = diseased
+  disease        | string  | Disease name, or null if healthy
+  confidence     | number  | 0.0 to 1.0  (x100 for percentage)
+  severity       | string  | "none" / "low" / "medium" / "high"
+  timestamp      | string  | ISO 8601 date-time string
+
+
+================================================================
+  ERROR RESPONSE FORMAT (all endpoints)
+================================================================
+
+  {
+    "success": false,
+    "error": {
+      "code":    "ERROR_CODE",
+      "message": "Human readable error message"
+    }
+  }
+
+
+================================================================
+  QUICK START — JavaScript Fetch Example
+================================================================
+
+  // 1. Poll sensor data every 5 seconds
+  setInterval(async () => {
+    const res  = await fetch("http://localhost:3000/api/latest");
+    const json = await res.json();
+    console.log(json.data.soil_moisture);     // e.g. 31
+    console.log(json.data.recommendation);   // e.g. "Monitor closely."
+  }, 5000);
+
+  // 2. Upload leaf image for AI diagnosis
+  const formData = new FormData();
+  formData.append("image", fileInput.files[0]);
+  const res  = await fetch("http://localhost:3000/api/v1/diagnose", {
+    method: "POST", body: formData
+  });
+  const json = await res.json();
+  console.log(json.data.disease);    // "Common Rust" or null
+  console.log(json.data.remedy);     // Treatment advice string
+
+  // 3. Turn pump ON
+  await fetch("http://localhost:3000/api/pump", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ state: "ON" })
+  });
+
+================================================================
