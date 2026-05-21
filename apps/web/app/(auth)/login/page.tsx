@@ -68,6 +68,12 @@ export default function LoginPage() {
     setIsLoading(true);
     setServerError(null);
 
+    if (!auth) {
+      setServerError("Authentication is unavailable. Please try again later.");
+      setIsLoading(false);
+      return;
+    }
+
     try {
       const persistence = result.data.rememberMe
         ? browserLocalPersistence
