@@ -116,6 +116,12 @@ export default function RegisterPage() {
     setIsLoading(true);
     setServerError(null);
 
+    if (!auth) {
+      setServerError("Authentication is unavailable. Please try again later.");
+      setIsLoading(false);
+      return;
+    }
+
     try {
       await createUserWithEmailAndPassword(auth, result.data.email, result.data.password);
       setSuccess(true);
