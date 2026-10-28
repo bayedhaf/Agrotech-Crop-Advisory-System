@@ -432,3 +432,5 @@ git push origin feature/AGRI-XX
 Proprietary. Team AgriTech Integrators, ASTU 2026.
 
 ---
+#   A g r o t e c h - C r o p - A d v i s o r y - S y s t e m  
+ 
